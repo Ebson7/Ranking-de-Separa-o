@@ -27,9 +27,10 @@ import {
   X,
   RefreshCw
 } from 'lucide-react';
+import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { auth, garantirAutenticacaoAnonima } from './firebase';
 import { Separador, Lancamento, Turno, TurnoPadrao, StatusSeparador } from './types';
 import { separadoresIniciais, lancamentosIniciais } from './dataDemo';
-import { garantirAutenticacaoAnonima } from './firebase';
 import {
   salvarSeparadorFirestore,
   excluirSeparadorFirestore,
@@ -56,10 +57,29 @@ export default function App() {
   // Toasts de Notificação
   const [toast, setToast] = useState<{ mensagem: string; tipo: 'success' | 'error' | 'info' } | null>(null);
 
+  const [authIniciado, setAuthIniciado] = useState(false);
+
+  // --- ESCUTA ATIVA DO STATUS DE AUTENTICAÇÃO DO FIREBASE ---
+  useEffect(() => {
+    const desinscreverAuth = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        console.log('Usuário autenticado no Firebase Firestore:', user.uid);
+        setAuthIniciado(true);
+      } else {
+        console.log('Iniciando autenticação anônima silenciosa...');
+        try {
+          await signInAnonymously(auth);
+        } catch (error) {
+          console.error('Erro de autenticação anônima no Firebase:', error);
+        }
+      }
+    });
+    return () => desinscreverAuth();
+  }, []);
+
   // --- CARREGAMENTO INICIAL EM TEMPO REAL COM O CLOUD FIRESTORE ---
   useEffect(() => {
-    // 1. Inicia autenticação anônima silenciosa em segundo plano
-    garantirAutenticacaoAnonima();
+    if (!authIniciado) return;
 
     // 2. Escuta ativa dos Separadores (com seed automático caso esteja vazio)
     const descadastrarSeps = escutarSeparadores((seps) => {
@@ -73,11 +93,16 @@ export default function App() {
       console.error('Erro de conexão ao ler os separadores:', err);
     });
 
-    // 3. Escuta ativa dos Lançamentos (com seed automático caso esteja vazio)
+    // 3. Escuta ativa dos Lançamentos (com seed automático e inserindo createdAt se necessário)
     const descadastrarLans = escutarLancamentos((lans) => {
       if (lans.length === 0) {
         console.log('Coleção de lançamentos vazia no Firestore. Inicializando dados de demonstração...');
-        lancamentosIniciais.forEach(l => salvarLancamentoFirestore(l));
+        lancamentosIniciais.forEach(l => {
+          salvarLancamentoFirestore({
+            ...l,
+            createdAt: l.createdAt || new Date().toISOString()
+          });
+        });
       } else {
         setLancamentos(lans);
       }
@@ -89,7 +114,7 @@ export default function App() {
       descadastrarSeps();
       descadastrarLans();
     };
-  }, []);
+  }, [authIniciado]);
 
   // --- MERGE E PERSISTÊNCIA REATIVA NO FIRESTORE EM DUPLO CANAL ---
   const saveSeparadores = async (novos: Separador[]) => {
