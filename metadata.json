@@ -1,0 +1,6 @@
+{
+  "name": "Ranking Separadores — Marsil Romaneio",
+  "description": "Sistema de controle e ranking de separadores de romaneios e pedidos para faturamento e gestão da Marsil.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
