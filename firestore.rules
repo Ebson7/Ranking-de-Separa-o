@@ -45,9 +45,9 @@ service cloud.firestore {
         incoming().turno in ['Tarde', 'Noite'] &&
         incoming().separadorId is string &&
         incoming().separadorId.size() <= 128 &&
-        incoming().quantidade is int &&
+        incoming().quantidade is number &&
         incoming().quantidade >= 0 &&
-        incoming().erros is int &&
+        incoming().erros is number &&
         incoming().erros >= 0 &&
         incoming().createdAt is string;
       allow update: if isSignedIn() && isValidId(lancamentoId) &&
@@ -55,9 +55,9 @@ service cloud.firestore {
         incoming().data == existing().data &&
         incoming().turno == existing().turno &&
         incoming().separadorId == existing().separadorId &&
-        incoming().quantidade is int &&
+        incoming().quantidade is number &&
         incoming().quantidade >= 0 &&
-        incoming().erros is int &&
+        incoming().erros is number &&
         incoming().erros >= 0;
       allow delete: if isSignedIn();
     }
