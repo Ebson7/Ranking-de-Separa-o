@@ -1,0 +1,65 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Rules for Separadores
+    match /separadores/{separadorId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(separadorId) &&
+        incoming().id == separadorId &&
+        incoming().nome is string &&
+        incoming().nome.size() <= 150 &&
+        incoming().turnoPadrao in ['Tarde', 'Noite', 'Ambos'] &&
+        incoming().status in ['Ativo', 'Inativo'];
+      allow delete: if isSignedIn();
+    }
+
+    // Rules for Lançamentos
+    match /lancamentos/{lancamentoId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(lancamentoId) &&
+        incoming().id == lancamentoId &&
+        incoming().data is string &&
+        incoming().data.size() <= 20 &&
+        incoming().turno in ['Tarde', 'Noite'] &&
+        incoming().separadorId is string &&
+        incoming().separadorId.size() <= 128 &&
+        incoming().quantidade is int &&
+        incoming().quantidade >= 0 &&
+        incoming().erros is int &&
+        incoming().erros >= 0 &&
+        incoming().createdAt is string;
+      allow update: if isSignedIn() && isValidId(lancamentoId) &&
+        incoming().id == lancamentoId &&
+        incoming().data == existing().data &&
+        incoming().turno == existing().turno &&
+        incoming().separadorId == existing().separadorId &&
+        incoming().quantidade is int &&
+        incoming().quantidade >= 0 &&
+        incoming().erros is int &&
+        incoming().erros >= 0;
+      allow delete: if isSignedIn();
+    }
+  }
+}

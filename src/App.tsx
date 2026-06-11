@@ -29,8 +29,25 @@ import {
 } from 'lucide-react';
 import { Separador, Lancamento, Turno, TurnoPadrao, StatusSeparador } from './types';
 import { separadoresIniciais, lancamentosIniciais } from './dataDemo';
+import { garantirAutenticacaoAnonima } from './firebase';
+import {
+  salvarSeparadorFirestore,
+  excluirSeparadorFirestore,
+  escutarSeparadores,
+  salvarLancamentoFirestore,
+  excluirLancamentoFirestore,
+  escutarLancamentos
+} from './firebaseUtils';
 
 export default function App() {
+  // --- ESTADO DE AUTENTICAÇÃO SIMPLES ---
+  const [usuarioLogado, setUsuarioLogado] = useState<{ username: string; perfil: 'admin' | 'visualizador' } | null>(() => {
+    const guardado = localStorage.getItem('marsil_usuario_logado');
+    return guardado ? JSON.parse(guardado) : null;
+  });
+  const [loginUser, setLoginUser] = useState('');
+  const [loginPass, setLoginPass] = useState('');
+
   // --- ESTADOS DO SISTEMA ---
   const [separadores, setSeparadores] = useState<Separador[]>([]);
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([]);
@@ -39,35 +56,114 @@ export default function App() {
   // Toasts de Notificação
   const [toast, setToast] = useState<{ mensagem: string; tipo: 'success' | 'error' | 'info' } | null>(null);
 
-  // --- CARREGAMENTO INICIAL DO LOCAL STORAGE ---
+  // --- CARREGAMENTO INICIAL EM TEMPO REAL COM O CLOUD FIRESTORE ---
   useEffect(() => {
-    const rawSep = localStorage.getItem('marsil_separadores');
-    const rawLan = localStorage.getItem('marsil_lancamentos');
+    // 1. Inicia autenticação anônima silenciosa em segundo plano
+    garantirAutenticacaoAnonima();
 
-    if (rawSep) {
-      setSeparadores(JSON.parse(rawSep));
-    } else {
-      localStorage.setItem('marsil_separadores', JSON.stringify(separadoresIniciais));
-      setSeparadores(separadoresIniciais);
-    }
+    // 2. Escuta ativa dos Separadores (com seed automático caso esteja vazio)
+    const descadastrarSeps = escutarSeparadores((seps) => {
+      if (seps.length === 0) {
+        console.log('Coleção de separadores vazia no Firestore. Inicializando dados de demonstração...');
+        separadoresIniciais.forEach(s => salvarSeparadorFirestore(s));
+      } else {
+        setSeparadores(seps);
+      }
+    }, (err) => {
+      console.error('Erro de conexão ao ler os separadores:', err);
+    });
 
-    if (rawLan) {
-      setLancamentos(JSON.parse(rawLan));
-    } else {
-      localStorage.setItem('marsil_lancamentos', JSON.stringify(lancamentosIniciais));
-      setLancamentos(lancamentosIniciais);
-    }
+    // 3. Escuta ativa dos Lançamentos (com seed automático caso esteja vazio)
+    const descadastrarLans = escutarLancamentos((lans) => {
+      if (lans.length === 0) {
+        console.log('Coleção de lançamentos vazia no Firestore. Inicializando dados de demonstração...');
+        lancamentosIniciais.forEach(l => salvarLancamentoFirestore(l));
+      } else {
+        setLancamentos(lans);
+      }
+    }, (err) => {
+      console.error('Erro de conexão ao ler os lançamentos:', err);
+    });
+
+    return () => {
+      descadastrarSeps();
+      descadastrarLans();
+    };
   }, []);
 
-  // salvar no localStorage sempre que modificar
-  const saveSeparadores = (novos: Separador[]) => {
+  // --- MERGE E PERSISTÊNCIA REATIVA NO FIRESTORE EM DUPLO CANAL ---
+  const saveSeparadores = async (novos: Separador[]) => {
     setSeparadores(novos);
-    localStorage.setItem('marsil_separadores', JSON.stringify(novos));
+    try {
+      // Sincroniza adições e alterações
+      for (const n of novos) {
+        const existente = separadores.find(s => s.id === n.id);
+        if (!existente || JSON.stringify(existente) !== JSON.stringify(n)) {
+          await salvarSeparadorFirestore(n);
+        }
+      }
+      // Sincroniza exclusões
+      for (const s of separadores) {
+        if (!novos.some(n => n.id === s.id)) {
+          await excluirSeparadorFirestore(s.id);
+        }
+      }
+    } catch (e) {
+      console.error('Erro ao sincronizar separadores com Firestore:', e);
+    }
   };
 
-  const saveLancamentos = (novos: Lancamento[]) => {
+  const saveLancamentos = async (novos: Lancamento[]) => {
     setLancamentos(novos);
-    localStorage.setItem('marsil_lancamentos', JSON.stringify(novos));
+    try {
+      // Sincroniza adições e alterações
+      for (const n of novos) {
+        const existente = lancamentos.find(l => l.id === n.id);
+        if (!existente || JSON.stringify(existente) !== JSON.stringify(n)) {
+          await salvarLancamentoFirestore(n);
+        }
+      }
+      // Sincroniza exclusões
+      for (const l of lancamentos) {
+        if (!novos.some(n => n.id === l.id)) {
+          await excluirLancamentoFirestore(l.id);
+        }
+      }
+    } catch (e) {
+      console.error('Erro ao sincronizar lançamentos com Firestore:', e);
+    }
+  };
+
+  const handleEfetuarLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    const user = loginUser.trim().toLowerCase();
+    const pass = loginPass.trim();
+
+    if (user === 'admin' && pass === 'admin') {
+      const usr = { username: 'Administrador', perfil: 'admin' as const };
+      setUsuarioLogado(usr);
+      localStorage.setItem('marsil_usuario_logado', JSON.stringify(usr));
+      showToast('Acesso administrativo concedido!');
+      setTabAtiva('lancamento');
+      setLoginUser('');
+      setLoginPass('');
+    } else if (user === 'marsil' && pass === '123') {
+      const usr = { username: 'Visualizador', perfil: 'visualizador' as const };
+      setUsuarioLogado(usr);
+      localStorage.setItem('marsil_usuario_logado', JSON.stringify(usr));
+      showToast('Acesso de visualização concedido!');
+      setTabAtiva('dashboard');
+      setLoginUser('');
+      setLoginPass('');
+    } else {
+      showToast('Dados inválidos! Tente novamente.', 'error');
+    }
+  };
+
+  const handleLogout = () => {
+    setUsuarioLogado(null);
+    localStorage.removeItem('marsil_usuario_logado');
+    showToast('Sessão encerrada com sucesso.');
   };
 
   // Exibir Toast helper
@@ -813,12 +909,93 @@ export default function App() {
     };
   }, [lancamentos, dashMes]);
 
+  if (!usuarioLogado) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0f1419] text-[#e1e8ed] font-sans selection:bg-[#ff6b35]/30 p-4">
+        <div className="w-full max-w-md bg-[#1a2129] border border-[#2d3742] rounded-lg p-6 sm:p-8 shadow-2xl relative overflow-hidden animate-fade-in">
+          {/* Top aesthetic border decoration */}
+          <div className="absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r from-[#ff6b35] to-[#ff9e7d]"></div>
+
+          <div className="flex flex-col items-center mb-6">
+            <div className="w-14 h-14 rounded-xl bg-[#ff6b35] flex items-center justify-center font-bold text-white text-2xl shadow-lg shadow-[#ff6b35]/20 mb-3 font-sans">
+              MR
+            </div>
+            <h1 className="text-lg font-bold text-white tracking-tight uppercase text-center font-sans">
+              Marsil Romaneio
+            </h1>
+            <p className="text-xs text-[#8899a6] text-center mt-0.5">
+              Sistema de Controle & Ranking de Separadores
+            </p>
+          </div>
+
+          <form onSubmit={handleEfetuarLogin} className="space-y-4">
+            <div>
+              <label className="block text-[10px] font-bold text-[#8899a6] uppercase tracking-wider mb-1.5">
+                Usuário
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: admin ou marsil"
+                value={loginUser}
+                onChange={(e) => setLoginUser(e.target.value)}
+                className="w-full bg-[#0f1419] border border-[#2d3742] rounded px-3 py-2 text-xs text-white placeholder-[#536471] focus:outline-none focus:border-[#ff6b35]"
+                required
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1.5">
+                <label className="block text-[10px] font-bold text-[#8899a6] uppercase tracking-wider">
+                  Senha
+                </label>
+                <span className="text-[9px] text-[#8899a6] font-mono">
+                  Senha padrão
+                </span>
+              </div>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={loginPass}
+                onChange={(e) => setLoginPass(e.target.value)}
+                className="w-full bg-[#0f1419] border border-[#2d3742] rounded px-3 py-2 text-xs text-white placeholder-[#536471] focus:outline-none focus:border-[#ff6b35]"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-[#ff6b35] hover:bg-[#e05a2b] active:scale-[0.99] text-white text-xs font-bold uppercase tracking-wider py-2.5 rounded transition-all shadow-md cursor-pointer mt-2"
+            >
+              Acessar Sistema
+            </button>
+          </form>
+
+          <div className="mt-6 pt-4 border-t border-[#2d3742] text-center space-y-1">
+            <p className="text-[10px] text-[#8899a6]">
+              Acesso Administrativo: <code className="text-white font-mono bg-[#0f1419] px-1 py-0.5 rounded">admin</code> / <code className="text-white font-mono bg-[#0f1419] px-1 py-0.5 rounded">admin</code>
+            </p>
+            <p className="text-[10px] text-[#8899a6]">
+              Acesso Visualizador (Consultas): <code className="text-white font-mono bg-[#0f1419] px-1 py-0.5 rounded">marsil</code> / <code className="text-white font-mono bg-[#0f1419] px-1 py-0.5 rounded">123</code>
+            </p>
+          </div>
+          
+          {toast && (
+            <div className="mt-4 flex items-center justify-center gap-2 px-3 py-1.5 rounded bg-[#ff3b30]/10 border border-[#ff3b30]/30 animate-fade-in">
+              <div className="w-1.5 h-1.5 rounded-full bg-[#ff3b30]" />
+              <span className="text-[10px] font-semibold text-[#ff8077]">{toast.mensagem}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-[#0f1419] text-[#e1e8ed] font-sans selection:bg-[#ff6b35]/30">
       
       {/* ─── CABEÇALHO PRINCIPAL (HIGH DENSITY) ─── */}
       <header className="border-b-[2px] border-[#2d3742] bg-[#0f1419] sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4 h-auto sm:h-[60px] py-1 sm:py-0">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col lg:flex-row items-center justify-between gap-4 h-auto lg:h-[60px] py-2 lg:py-0">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded bg-[#ff6b35] flex items-center justify-center font-bold text-white text-md shadow-md shadow-[#ff6b35]/20">
               MR
@@ -828,33 +1005,51 @@ export default function App() {
             </div>
           </div>
 
-          {/* Abas Superiores */}
-          <nav className="flex items-stretch gap-1 sm:h-[58px] select-none py-1 sm:py-0">
-            {[
-              { id: 'lancamento', label: 'Lançamento Diário', icon: Calendar },
-              { id: 'dashboard', label: 'Ranking / Dashboard', icon: TrendingUp },
-              { id: 'separadores', label: 'Separadores', icon: Users },
-              { id: 'historico', label: 'Histórico', icon: History }
-            ].map(tab => {
-              const Icon = tab.icon;
-              const ativa = tabAtiva === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  id={`nav-tab-${tab.id}`}
-                  onClick={() => setTabAtiva(tab.id as any)}
-                  className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-0 text-xs sm:text-sm font-semibold border-b-[3px] transition-all cursor-pointer h-full ${
-                    ativa 
-                      ? 'text-[#ff6b35] border-[#ff6b35] bg-[#ff6b35]/[0.05]' 
-                      : 'text-[#8899a6] border-transparent hover:text-white hover:bg-[#1a2129]'
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
-          </nav>
+          <div className="flex items-center flex-col sm:flex-row gap-4 w-full lg:w-auto justify-end">
+            {/* Abas Superiores */}
+            <nav className="flex items-stretch gap-1 h-auto sm:h-[58px] select-none py-1 sm:py-0 overflow-x-auto">
+              {[
+                { id: 'lancamento', label: 'Lançamento Diário', icon: Calendar, adminOnly: true },
+                { id: 'dashboard', label: 'Ranking / Dashboard', icon: TrendingUp, adminOnly: false },
+                { id: 'separadores', label: 'Separadores', icon: Users, adminOnly: true },
+                { id: 'historico', label: 'Histórico', icon: History, adminOnly: false }
+              ].filter(tab => usuarioLogado?.perfil === 'admin' || !tab.adminOnly).map(tab => {
+                const Icon = tab.icon;
+                const ativa = tabAtiva === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    id={`nav-tab-${tab.id}`}
+                    onClick={() => setTabAtiva(tab.id as any)}
+                    className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-0 text-xs sm:text-sm font-semibold border-b-[3px] transition-all cursor-pointer h-full ${
+                      ativa 
+                        ? 'text-[#ff6b35] border-[#ff6b35] bg-[#ff6b35]/[0.05]' 
+                        : 'text-[#8899a6] border-transparent hover:text-white hover:bg-[#1a2129]'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            {/* Perfil e Logout */}
+            <div className="flex items-center gap-3 border-l border-[#2d3742] pl-4 self-center">
+              <div className="flex flex-col items-end">
+                <span className="text-xs font-bold text-white leading-tight">{usuarioLogado?.username}</span>
+                <span className="text-[9px] text-[#8899a6] font-mono leading-none tracking-wider uppercase">
+                  {usuarioLogado?.perfil === 'admin' ? 'Administrador' : 'Leitura'}
+                </span>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-1 bg-[#1a2129] border border-[#2d3742] hover:bg-[#ff3b30]/10 hover:border-[#ff3b30]/40 text-[#8899a6] hover:text-[#ff3b30] text-[10px] font-bold px-2.5 py-1.5 rounded transition-all cursor-pointer"
+              >
+                Sair
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -2014,13 +2209,13 @@ export default function App() {
                     <th className="py-1.5 px-3 text-center">Quantidade</th>
                     <th className="py-1.5 px-3 text-center">Erros</th>
                     <th className="py-1.5 px-3">Observações</th>
-                    <th className="py-1.5 px-3 text-right">Ação</th>
+                    {usuarioLogado?.perfil === 'admin' && <th className="py-1.5 px-3 text-right">Ação</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#2d3742]/45">
                   {lancamentosFiltradosHistorico.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-6 text-center text-[#8899a6]">
+                      <td colSpan={usuarioLogado?.perfil === 'admin' ? 7 : 6} className="py-6 text-center text-[#8899a6]">
                         Nenhum lançamento corresponde aos filtros de busca aplicados.
                       </td>
                     </tr>
@@ -2053,26 +2248,28 @@ export default function App() {
                           <td className="py-1 px-3 text-xs italic text-orange-200/90 truncate max-w-[180px]" title={l.observacao}>
                             {l.observacao ? `"${l.observacao}"` : '---'}
                           </td>
-                          <td className="py-1 px-3 text-right whitespace-nowrap">
-                            <div className="flex items-center justify-end gap-1">
-                              <button
-                                type="button"
-                                onClick={() => setLanEditando(l)}
-                                className="p-1 bg-transparent hover:bg-[#2d3742] text-slate-400 hover:text-white rounded transition-colors cursor-pointer"
-                                title="Corrigir Lançamento"
-                              >
-                                <Edit2 className="w-3 h-3" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleExcluirLancamento(l.id)}
-                                className="p-1 bg-transparent hover:bg-[#ff3b30]/10 text-[#8899a6] hover:text-[#ff3b30] rounded transition-colors cursor-pointer"
-                                title="Deletar permanentemente"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          </td>
+                          {usuarioLogado?.perfil === 'admin' && (
+                            <td className="py-1 px-3 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setLanEditando(l)}
+                                  className="p-1 bg-transparent hover:bg-[#2d3742] text-slate-400 hover:text-white rounded transition-colors cursor-pointer"
+                                  title="Corrigir Lançamento"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleExcluirLancamento(l.id)}
+                                  className="p-1 bg-transparent hover:bg-[#ff3b30]/10 text-[#8899a6] hover:text-[#ff3b30] rounded transition-colors cursor-pointer"
+                                  title="Deletar permanentemente"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       );
                     })
@@ -2090,19 +2287,23 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p>© 2026 Marsil Distribuidora de Alimentos Atacadista • Todos os direitos reservados.</p>
           <div className="flex items-center gap-1.5 font-mono text-[10px]">
-            <span>BD: LocalStorage Ativo</span>
-            <span>•</span>
-            <button 
-              onClick={() => {
-                if (confirm('Deseja realmente limpar TODOS os dados e reiniciar o sistema?')) {
-                  localStorage.clear();
-                  window.location.reload();
-                }
-              }} 
-              className="text-[#ff3b30] hover:underline cursor-pointer flex items-center gap-0.5"
-            >
-              <RefreshCw className="w-3 h-3" /> Reiniciar BD
-            </button>
+            <span>BD: Firebase Firestore Conectado</span>
+            {usuarioLogado?.perfil === 'admin' && (
+              <>
+                <span>•</span>
+                <button 
+                  onClick={() => {
+                    if (confirm('Deseja realmente limpar os caches de sessão e reiniciar o sistema?')) {
+                      localStorage.clear();
+                      window.location.reload();
+                    }
+                  }} 
+                  className="text-[#ff3b30] hover:underline cursor-pointer flex items-center gap-0.5"
+                >
+                  <RefreshCw className="w-3 h-3" /> Reiniciar Sessão
+                </button>
+              </>
+            )}
           </div>
         </div>
       </footer>

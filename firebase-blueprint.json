@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "separador": {
+      "title": "Separador",
+      "description": "Dados do colaborador separador de mercadorias",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nome": { "type": "string" },
+        "turnoPadrao": { "type": "string", "enum": ["Tarde", "Noite", "Ambos"] },
+        "status": { "type": "string", "enum": ["Ativo", "Inativo"] }
+      },
+      "required": ["id", "nome", "turnoPadrao", "status"]
+    },
+    "lancamento": {
+      "title": "Lançamento",
+      "description": "Registro de quantidade e erros de uma separação diária",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "data": { "type": "string" },
+        "turno": { "type": "string", "enum": ["Tarde", "Noite"] },
+        "separadorId": { "type": "string" },
+        "quantidade": { "type": "integer" },
+        "erros": { "type": "integer" },
+        "observacao": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "data", "turno", "separadorId", "quantidade", "erros"]
+    }
+  },
+  "firestore": {
+    "/separadores/{separadorId}": {
+      "schema": "separador",
+      "description": "Coleção de cadastro de separadores"
+    },
+    "/lancamentos/{lancamentoId}": {
+      "schema": "lancamento",
+      "description": "Coleção de registros de lançamentos diários"
+    }
+  }
+}
