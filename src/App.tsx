@@ -37,7 +37,9 @@ import {
   escutarSeparadores,
   salvarLancamentoFirestore,
   excluirLancamentoFirestore,
-  escutarLancamentos
+  escutarLancamentos,
+  limparTodosLancamentosFirestore,
+  zerarTudoFirestore
 } from './firebaseUtils';
 
 export default function App() {
@@ -96,15 +98,6 @@ export default function App() {
     let parsedSeps = sepsLocais ? JSON.parse(sepsLocais) : [];
     let parsedLans = lansLocais ? JSON.parse(lansLocais) : [];
     
-    if (parsedSeps.length === 0) {
-      parsedSeps = separadoresIniciais;
-      localStorage.setItem('marsil_separadores_offline', JSON.stringify(parsedSeps));
-    }
-    if (parsedLans.length === 0) {
-      parsedLans = lancamentosIniciais;
-      localStorage.setItem('marsil_lancamentos_offline', JSON.stringify(parsedLans));
-    }
-    
     setSeparadores(parsedSeps);
     setLancamentos(parsedLans);
     showToast('Modo local (Offline) ativado com sucesso!', 'info');
@@ -115,8 +108,6 @@ export default function App() {
     const lansLocais = localStorage.getItem('marsil_lancamentos_offline');
     let parsedSeps = sepsLocais ? JSON.parse(sepsLocais) : [];
     let parsedLans = lansLocais ? JSON.parse(lansLocais) : [];
-    if (parsedSeps.length === 0) parsedSeps = separadoresIniciais;
-    if (parsedLans.length === 0) parsedLans = lancamentosIniciais;
     setSeparadores(parsedSeps);
     setLancamentos(parsedLans);
     setModoOffline(true);
@@ -161,32 +152,17 @@ export default function App() {
       return;
     }
 
-    // 2. Escuta ativa dos Separadores (com seed automático caso esteja vazio)
+    // 2. Escuta ativa dos Separadores
     const descadastrarSeps = escutarSeparadores((seps) => {
-      if (seps.length === 0) {
-        console.log('Coleção de separadores vazia no Firestore. Inicializando dados de demonstração...');
-        separadoresIniciais.forEach(s => salvarSeparadorFirestore(s));
-      } else {
-        setSeparadores(seps);
-      }
+      setSeparadores(seps);
     }, (err) => {
       console.error('Erro de conexão ao ler os separadores:', err);
       ativarFallbackOfflineSilencioso();
     });
 
-    // 3. Escuta ativa dos Lançamentos (com seed automático e inserindo createdAt se necessário)
+    // 3. Escuta ativa dos Lançamentos
     const descadastrarLans = escutarLancamentos((lans) => {
-      if (lans.length === 0) {
-        console.log('Coleção de lançamentos vazia no Firestore. Inicializando dados de demonstração...');
-        lancamentosIniciais.forEach(l => {
-          salvarLancamentoFirestore({
-            ...l,
-            createdAt: l.createdAt || new Date().toISOString()
-          });
-        });
-      } else {
-        setLancamentos(lans);
-      }
+      setLancamentos(lans);
     }, (err) => {
       console.error('Erro de conexão ao ler os lançamentos:', err);
       ativarFallbackOfflineSilencioso();
@@ -1004,6 +980,108 @@ export default function App() {
     reader.readAsText(file);
     // Resetar input
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Limpar todo o Histórico de Lançamentos
+  const handleLimparHistorico = async () => {
+    if (usuarioLogado?.perfil !== 'admin') {
+      showToast('Apenas administradores podem limpar o histórico!', 'error');
+      return;
+    }
+
+    if (!confirm('ATENÇÃO: Deseja realmente limpar todo o histórico de lançamentos? Essa ação é irreversível e apagará TODOS os registros de pontuação.')) {
+      return;
+    }
+
+    if (modoOffline) {
+      setLancamentos([]);
+      localStorage.setItem('marsil_lancamentos_offline', JSON.stringify([]));
+      showToast('Histórico local (offline) foi limpo com sucesso!', 'success');
+    } else {
+      try {
+        showToast('Limpando lançamentos do Firestore em nuvem...', 'info');
+        await limparTodosLancamentosFirestore();
+        setLancamentos([]);
+        showToast('Histórico em nuvem apagado com sucesso!', 'success');
+      } catch (err) {
+        console.error('Erro ao limpar histórico:', err);
+        showToast('Falha ao limpar o histórico do Firestore.', 'error');
+      }
+    }
+  };
+
+  // Reset Geral para Produção (Limpa lançamentos E separadores)
+  const handleResetTotalParaProducao = async () => {
+    if (usuarioLogado?.perfil !== 'admin') {
+      showToast('Apenas administradores podem resetar o banco de dados!', 'error');
+      return;
+    }
+
+    if (!confirm('ATENÇÃO MÁXIMA: Esta ação apagará TODOS os lançamentos e também TODOS os cadastros de separadores! O aplicativo ficará totalmente vazio, pronto para produção. Deseja prosseguir?')) {
+      return;
+    }
+
+    if (!confirm('Confirme mais uma vez para consolidar o reset geral para lançamento em produção.')) {
+      return;
+    }
+
+    if (modoOffline) {
+      setLancamentos([]);
+      setSeparadores([]);
+      localStorage.setItem('marsil_lancamentos_offline', JSON.stringify([]));
+      localStorage.setItem('marsil_separadores_offline', JSON.stringify([]));
+      showToast('Banco de dados local totalmente resetado!', 'success');
+    } else {
+      try {
+        showToast('Limpando todo o Firestore de forma definitiva para produção...', 'info');
+        await zerarTudoFirestore();
+        setLancamentos([]);
+        setSeparadores([]);
+        showToast('Banco de dados em nuvem zerado com sucesso para produção!', 'success');
+      } catch (err) {
+        console.error('Erro ao resetar banco do Firestore:', err);
+        showToast('Falha ao resetar o Firestore.', 'error');
+      }
+    }
+  };
+
+  // Carregar/Restaurar os dados de demonstração (manual)
+  const handleCarregarDadosDemonstracao = async () => {
+    if (usuarioLogado?.perfil !== 'admin') {
+      showToast('Apenas administradores podem carregar dados de demonstração!', 'error');
+      return;
+    }
+
+    if (!confirm('Deseja povoar o banco de dados com os registros e separadores de demonstração originais?')) {
+      return;
+    }
+
+    if (modoOffline) {
+      setSeparadores(separadoresIniciais);
+      setLancamentos(lancamentosIniciais);
+      localStorage.setItem('marsil_separadores_offline', JSON.stringify(separadoresIniciais));
+      localStorage.setItem('marsil_lancamentos_offline', JSON.stringify(lancamentosIniciais));
+      showToast('Dados de demonstração restaurados localmente!', 'success');
+    } else {
+      try {
+        showToast('Populando banco em nuvem...', 'info');
+        // Salva separadores
+        for (const s of separadoresIniciais) {
+          await salvarSeparadorFirestore(s);
+        }
+        // Salva lançamentos
+        for (const l of lancamentosIniciais) {
+          await salvarLancamentoFirestore({
+            ...l,
+            createdAt: l.createdAt || new Date().toISOString()
+          });
+        }
+        showToast('Dados de demonstração restaurados com sucesso no Firestore!', 'success');
+      } catch (err) {
+        console.error('Erro ao restaurar demonstração no Firestore:', err);
+        showToast('Falha ao restaurar demonstração no Firestore.', 'error');
+      }
+    }
   };
 
 
@@ -2372,7 +2450,7 @@ export default function App() {
                 <p className="text-[10px] text-[#8899a6] font-medium uppercase font-mono mt-0.5">Exatidão, consulta completa e manutenção de cadastros</p>
               </div>
 
-              {/* Botões Importação/Exportação */}
+               {/* Botões Importação/Exportação */}
               <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
@@ -2407,6 +2485,39 @@ export default function App() {
                     className="hidden"
                   />
                 </div>
+
+                {usuarioLogado?.perfil === 'admin' && (
+                  <>
+                    <span className="text-[#2d3742] select-none mx-1 text-sm">|</span>
+                    <button
+                      type="button"
+                      onClick={handleLimparHistorico}
+                      className="flex items-center gap-1.5 bg-[#ff6b35]/15 border border-[#ff6b35]/30 hover:bg-[#ff6b35]/25 font-bold text-[10px] py-1 px-2 rounded transition-colors cursor-pointer text-[#ff6b35] uppercase"
+                      title="Apagar todos os lançamentos"
+                    >
+                      <Trash2 className="w-3 h-3 text-[#ff6b35]" />
+                      Limpar Histórico
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetTotalParaProducao}
+                      className="flex items-center gap-1.5 bg-red-500/15 border border-red-500/30 hover:bg-red-500/25 font-bold text-[10px] py-1 px-2 rounded transition-colors cursor-pointer text-red-400 uppercase"
+                      title="Limpar lançamentos e separadores (Aplicativo Vazio para Produção)"
+                    >
+                      <Trash2 className="w-3 h-3 text-red-500" />
+                      Zerar Banco (Produção)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCarregarDadosDemonstracao}
+                      className="flex items-center gap-1.5 bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 font-bold text-[10px] py-1 px-2 rounded transition-colors cursor-pointer text-amber-300 uppercase"
+                      title="Restaurar separadores e lançamentos de demonstração"
+                    >
+                      <RefreshCw className="w-3 h-3 text-amber-400" />
+                      Carregar Demo
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 

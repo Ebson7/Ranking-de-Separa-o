@@ -135,3 +135,34 @@ export function escutarLancamentos(callback: (dados: Lancamento[]) => void, onEr
     }
   );
 }
+
+export async function limparTodosLancamentosFirestore(): Promise<void> {
+  const path = 'lancamentos';
+  try {
+    const snapshot = await getDocs(collection(db, 'lancamentos'));
+    for (const d of snapshot.docs) {
+      await deleteDoc(doc(db, 'lancamentos', d.id));
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+export async function zerarTudoFirestore(): Promise<void> {
+  try {
+    // Excluir todos os lançamentos
+    const snapLans = await getDocs(collection(db, 'lancamentos'));
+    for (const d of snapLans.docs) {
+      await deleteDoc(doc(db, 'lancamentos', d.id));
+    }
+    
+    // Excluir todos os separadores
+    const snapSeps = await getDocs(collection(db, 'separadores'));
+    for (const d of snapSeps.docs) {
+      await deleteDoc(doc(db, 'separadores', d.id));
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, 'tudo');
+  }
+}
+
