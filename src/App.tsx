@@ -2182,7 +2182,7 @@ export default function App() {
                     className="w-full bg-[#0f1419] border border-[#2d3742] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#ff6b35] cursor-pointer"
                   >
                     <option value="Marsil SP">Marsil SP (São Paulo)</option>
-                    <option value="Marsil BC">Marsil BC (Balneário Camboriú)</option>
+                    <option value="Marsil BC">Marsil BC (Boracéia)</option>
                   </select>
                 </div>
 
