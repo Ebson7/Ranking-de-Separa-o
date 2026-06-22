@@ -68,9 +68,74 @@ export default function App() {
   const [toast, setToast] = useState<{ mensagem: string; tipo: 'success' | 'error' | 'info' } | null>(null);
 
   const [authIniciado, setAuthIniciado] = useState(false);
+  const [modoOffline, setModoOffline] = useState<boolean>(() => {
+    return localStorage.getItem('marsil_modo_offline') === 'true';
+  });
+  const [tempoExcedido, setTempoExcedido] = useState(false);
+
+  // Monitora tempo de sincronização para oferecer opção offline se demorar mais que 4 segundos
+  useEffect(() => {
+    if (usuarioLogado && !authIniciado && !modoOffline) {
+      const timer = setTimeout(() => {
+        setTempoExcedido(true);
+      }, 4000);
+      return () => clearTimeout(timer);
+    } else {
+      setTempoExcedido(false);
+    }
+  }, [usuarioLogado, authIniciado, modoOffline]);
+
+  const ativarModoOffline = () => {
+    localStorage.setItem('marsil_modo_offline', 'true');
+    setModoOffline(true);
+    setAuthIniciado(true);
+    
+    // Carrega dados offline
+    const sepsLocais = localStorage.getItem('marsil_separadores_offline');
+    const lansLocais = localStorage.getItem('marsil_lancamentos_offline');
+    let parsedSeps = sepsLocais ? JSON.parse(sepsLocais) : [];
+    let parsedLans = lansLocais ? JSON.parse(lansLocais) : [];
+    
+    if (parsedSeps.length === 0) {
+      parsedSeps = separadoresIniciais;
+      localStorage.setItem('marsil_separadores_offline', JSON.stringify(parsedSeps));
+    }
+    if (parsedLans.length === 0) {
+      parsedLans = lancamentosIniciais;
+      localStorage.setItem('marsil_lancamentos_offline', JSON.stringify(parsedLans));
+    }
+    
+    setSeparadores(parsedSeps);
+    setLancamentos(parsedLans);
+    showToast('Modo local (Offline) ativado com sucesso!', 'info');
+  };
+
+  const ativarFallbackOfflineSilencioso = () => {
+    const sepsLocais = localStorage.getItem('marsil_separadores_offline');
+    const lansLocais = localStorage.getItem('marsil_lancamentos_offline');
+    let parsedSeps = sepsLocais ? JSON.parse(sepsLocais) : [];
+    let parsedLans = lansLocais ? JSON.parse(lansLocais) : [];
+    if (parsedSeps.length === 0) parsedSeps = separadoresIniciais;
+    if (parsedLans.length === 0) parsedLans = lancamentosIniciais;
+    setSeparadores(parsedSeps);
+    setLancamentos(parsedLans);
+    setModoOffline(true);
+    setAuthIniciado(true);
+  };
+
+  const alternarModoOnline = () => {
+    localStorage.removeItem('marsil_modo_offline');
+    setModoOffline(false);
+    setAuthIniciado(false);
+    window.location.reload();
+  };
 
   // --- ESCUTA ATIVA DO STATUS DE AUTENTICAÇÃO DO FIREBASE ---
   useEffect(() => {
+    if (modoOffline) {
+      ativarFallbackOfflineSilencioso();
+      return;
+    }
     const desinscreverAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
         console.log('Usuário autenticado no Firebase Firestore:', user.uid);
@@ -81,15 +146,20 @@ export default function App() {
           await signInAnonymously(auth);
         } catch (error) {
           console.error('Erro de autenticação anônima no Firebase:', error);
+          ativarFallbackOfflineSilencioso();
         }
       }
     });
     return () => desinscreverAuth();
-  }, []);
+  }, [modoOffline]);
 
   // --- CARREGAMENTO INICIAL EM TEMPO REAL COM O CLOUD FIRESTORE ---
   useEffect(() => {
     if (!authIniciado) return;
+
+    if (modoOffline) {
+      return;
+    }
 
     // 2. Escuta ativa dos Separadores (com seed automático caso esteja vazio)
     const descadastrarSeps = escutarSeparadores((seps) => {
@@ -101,6 +171,7 @@ export default function App() {
       }
     }, (err) => {
       console.error('Erro de conexão ao ler os separadores:', err);
+      ativarFallbackOfflineSilencioso();
     });
 
     // 3. Escuta ativa dos Lançamentos (com seed automático e inserindo createdAt se necessário)
@@ -118,17 +189,21 @@ export default function App() {
       }
     }, (err) => {
       console.error('Erro de conexão ao ler os lançamentos:', err);
+      ativarFallbackOfflineSilencioso();
     });
 
     return () => {
       descadastrarSeps();
       descadastrarLans();
     };
-  }, [authIniciado]);
+  }, [authIniciado, modoOffline]);
 
   // --- MERGE E PERSISTÊNCIA REATIVA NO FIRESTORE EM DUPLO CANAL ---
   const saveSeparadores = async (novos: Separador[]) => {
     setSeparadores(novos);
+    localStorage.setItem('marsil_separadores_offline', JSON.stringify(novos));
+    if (modoOffline) return;
+
     try {
       // Sincroniza adições e alterações
       for (const n of novos) {
@@ -150,6 +225,9 @@ export default function App() {
 
   const saveLancamentos = async (novos: Lancamento[]) => {
     setLancamentos(novos);
+    localStorage.setItem('marsil_lancamentos_offline', JSON.stringify(novos));
+    if (modoOffline) return;
+
     try {
       // Sincroniza adições e alterações
       for (const n of novos) {
@@ -1000,9 +1078,35 @@ export default function App() {
           <h2 className="text-sm font-bold text-white uppercase tracking-wider mb-2 font-sans">
             Sincronizando com o Banco de Dados
           </h2>
-          <p className="text-xs text-[#8899a6]">
+          <p className="text-xs text-[#8899a6] mb-4">
             Por favor, aguarde enquanto estabelecemos uma conexão segura com o Firestore do Firebase...
           </p>
+
+          {tempoExcedido && (
+            <div className="w-full bg-[#1a2129] border border-[#ff6b35]/30 rounded-lg p-5 shadow-xl text-left animate-fade-in">
+              <div className="flex items-start gap-2.5 mb-4">
+                <AlertTriangle className="w-4 h-4 text-[#ff6b35] shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Conexão Lenta ou Bloqueada</h3>
+                  <p className="text-[11px] text-[#8899a6] mt-1 leading-relaxed">
+                    Não conseguimos conectar ao nosso banco em nuvem. Isso geralmente acontece devido a restrições de cookies em iframes do navegador.
+                  </p>
+                </div>
+              </div>
+              
+              <button
+                type="button"
+                onClick={ativarModoOffline}
+                className="w-full bg-[#ff6b35] hover:bg-[#e05621] text-white text-[11px] font-bold uppercase py-2 px-3 rounded shadow transition-all cursor-pointer text-center"
+              >
+                Trabalhar em Modo Offline
+              </button>
+              
+              <p className="text-[9px] text-[#8899a6]/70 text-center mt-2.5">
+                Seus dados serão gravados com segurança localmente no seu navegador.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1106,29 +1210,51 @@ export default function App() {
             </div>
 
             {/* Sliding Filial Selector */}
-            <div className="flex bg-[#1a2129] border border-[#2d3742] rounded p-0.5 text-[10px] font-bold">
-              <button
-                type="button"
-                onClick={() => setFilialSelecionada('Marsil SP')}
-                className={`px-3 py-1 rounded cursor-pointer transition-all ${
-                  filialSelecionada === 'Marsil SP'
-                    ? 'bg-[#ff6b35] text-white shadow-sm'
-                    : 'text-[#8899a6] hover:text-white'
-                }`}
-              >
-                Marsil SP
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilialSelecionada('Marsil BC')}
-                className={`px-3 py-1 rounded cursor-pointer transition-all ${
-                  filialSelecionada === 'Marsil BC'
-                    ? 'bg-[#ff6b35] text-white shadow-sm'
-                    : 'text-[#8899a6] hover:text-white'
-                }`}
-              >
-                Marsil BC
-              </button>
+            <div className="flex items-center gap-2">
+              <div className="flex bg-[#1a2129] border border-[#2d3742] rounded p-0.5 text-[10px] font-bold">
+                <button
+                  type="button"
+                  onClick={() => setFilialSelecionada('Marsil SP')}
+                  className={`px-3 py-1 rounded cursor-pointer transition-all ${
+                    filialSelecionada === 'Marsil SP'
+                      ? 'bg-[#ff6b35] text-white shadow-sm'
+                      : 'text-[#8899a6] hover:text-white'
+                  }`}
+                >
+                  Marsil SP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilialSelecionada('Marsil BC')}
+                  className={`px-3 py-1 rounded cursor-pointer transition-all ${
+                    filialSelecionada === 'Marsil BC'
+                      ? 'bg-[#ff6b35] text-white shadow-sm'
+                      : 'text-[#8899a6] hover:text-white'
+                  }`}
+                >
+                  Marsil BC
+                </button>
+              </div>
+
+              {/* Status de Conexão */}
+              {modoOffline ? (
+                <div className="flex items-center gap-1.5 bg-[#ff6b35]/10 border border-[#ff6b35]/20 px-2.5 py-1 rounded text-[9px] font-bold text-[#ff6b35] uppercase tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#ff6b35] animate-pulse"></span>
+                  <span>Modo Local (Offline)</span>
+                  <button 
+                    onClick={alternarModoOnline}
+                    className="ml-1 bg-[#ff6b35] hover:bg-[#e05621] text-white font-extrabold text-[8px] py-0.5 px-1.5 rounded transition-colors cursor-pointer uppercase"
+                    title="Tentar reconectar ao Firebase em nuvem"
+                  >
+                    Conectar
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/25 px-2.5 py-1 rounded text-[9px] font-bold text-emerald-400 uppercase tracking-wider select-none">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  <span>Banco em Nuvem (Online)</span>
+                </div>
+              )}
             </div>
           </div>
 
