@@ -31,7 +31,8 @@ service cloud.firestore {
         incoming().nome is string &&
         incoming().nome.size() <= 150 &&
         incoming().turnoPadrao in ['Tarde', 'Noite', 'Ambos'] &&
-        incoming().status in ['Ativo', 'Inativo'];
+        incoming().status in ['Ativo', 'Inativo'] &&
+        (!('filial' in incoming()) || incoming().filial in ['Marsil SP', 'Marsil BC']);
       allow delete: if isSignedIn();
     }
 
@@ -49,7 +50,8 @@ service cloud.firestore {
         incoming().quantidade >= 0 &&
         incoming().erros is number &&
         incoming().erros >= 0 &&
-        incoming().createdAt is string;
+        incoming().createdAt is string &&
+        (!('filial' in incoming()) || incoming().filial in ['Marsil SP', 'Marsil BC']);
       allow update: if isSignedIn() && isValidId(lancamentoId) &&
         incoming().id == lancamentoId &&
         incoming().data == existing().data &&
@@ -58,7 +60,8 @@ service cloud.firestore {
         incoming().quantidade is number &&
         incoming().quantidade >= 0 &&
         incoming().erros is number &&
-        incoming().erros >= 0;
+        incoming().erros >= 0 &&
+        (!('filial' in incoming()) || incoming().filial in ['Marsil SP', 'Marsil BC']);
       allow delete: if isSignedIn();
     }
   }

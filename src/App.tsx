@@ -54,6 +54,16 @@ export default function App() {
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([]);
   const [tabAtiva, setTabAtiva] = useState<'lancamento' | 'dashboard' | 'separadores' | 'historico'>('lancamento');
   
+  // --- FILIAL ATIVA ---
+  const [filialSelecionada, setFilialSelecionada] = useState<'Marsil SP' | 'Marsil BC'>(() => {
+    const guardada = localStorage.getItem('marsil_filial_selecionada');
+    return (guardada === 'Marsil SP' || guardada === 'Marsil BC') ? guardada : 'Marsil SP';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('marsil_filial_selecionada', filialSelecionada);
+  }, [filialSelecionada]);
+  
   // Toasts de Notificação
   const [toast, setToast] = useState<{ mensagem: string; tipo: 'success' | 'error' | 'info' } | null>(null);
 
@@ -229,16 +239,17 @@ export default function App() {
   const separadoresAtivosFiltrados = useMemo(() => {
     return separadores.filter(s => 
       s.status === 'Ativo' && 
+      (s.filial || 'Marsil SP') === filialSelecionada && 
       (buscaSeparador === '' || s.nome.toLowerCase().includes(buscaSeparador.toLowerCase()))
     );
-  }, [separadores, buscaSeparador]);
+  }, [separadores, buscaSeparador, filialSelecionada]);
 
   // Lançamentos realizados na data selecionada (para a parte inferior da aba Lançamento Diário)
   const lancamentosDoDia = useMemo(() => {
     return lancamentos
-      .filter(l => l.data === lancData)
+      .filter(l => l.data === lancData && (l.filial || 'Marsil SP') === filialSelecionada)
       .sort((a, b) => b.id.localeCompare(a.id));
-  }, [lancamentos, lancData]);
+  }, [lancamentos, lancData, filialSelecionada]);
 
   // Submeter Lançamento Diário
   const handleSalvarLancamento = (e?: React.FormEvent) => {
@@ -263,14 +274,16 @@ export default function App() {
       quantidade: Math.floor(qtdNum),
       erros: Math.abs(Math.floor(lancErros)),
       observacao: lancObs.trim(),
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      filial: filialSelecionada
     };
 
-    // Verificar duplicação (mesma data + mesmo turno + mesmo separador)
+    // Verificar duplicação (mesma data + mesmo turno + mesmo separador + mesma filial)
     const existente = lancamentos.find(l => 
       l.data === novoReg.data && 
       l.turno === novoReg.turno && 
-      l.separadorId === novoReg.separadorId
+      l.separadorId === novoReg.separadorId &&
+      (l.filial || 'Marsil SP') === filialSelecionada
     );
 
     if (existente) {
@@ -353,14 +366,16 @@ export default function App() {
   // --- ABA 2: RANKING / DASHBOARD ---
   // Obter meses únicos disponíveis para filtro
   const mesesDisponiveis = useMemo(() => {
-    const list = lancamentos.map(l => l.data.substring(0, 7)); // YYYY-MM
+    const list = lancamentos
+      .filter(l => (l.filial || 'Marsil SP') === filialSelecionada)
+      .map(l => l.data.substring(0, 7)); // YYYY-MM
     // Garantir que o mês atual esteja contido, caso esteja vazio
     const mesAtualStr = hojeISO.substring(0, 7);
     if (!list.includes(mesAtualStr)) {
       list.push(mesAtualStr);
     }
     return Array.from(new Set(list)).sort((a: string, b: string) => b.localeCompare(a));
-  }, [lancamentos, hojeISO]);
+  }, [lancamentos, hojeISO, filialSelecionada]);
 
   // Estado dos Filtros do Dashboard
   const [dashMes, setDashMes] = useState<string>(hojeISO.substring(0, 7));
@@ -369,14 +384,30 @@ export default function App() {
   const [ordenacaoCampo, setOrdenacaoCampo] = useState<string>('pontos');
   const [ordenacaoDirecao, setOrdenacaoDirecao] = useState<'asc' | 'desc'>('desc');
 
-  // Lançamentos filtrados para o Dashboard (Mês e Turno aplicados)
+  // Ajusta automaticamente o mês ativo caso mude a filial selecionada
+  useEffect(() => {
+    const list = lancamentos
+      .filter(l => (l.filial || 'Marsil SP') === filialSelecionada)
+      .map(l => l.data.substring(0, 7));
+    if (list.length > 0) {
+      const sorted = Array.from(new Set(list)).sort((a: string, b: string) => b.localeCompare(a));
+      if (!sorted.includes(dashMes)) {
+        setDashMes(sorted[0]);
+      }
+    } else {
+      setDashMes(hojeISO.substring(0, 7));
+    }
+  }, [filialSelecionada, lancamentos, hojeISO]);
+
+  // Lançamentos filtrados para o Dashboard (Mês, Turno e Filial aplicados)
   const lancamentosDoDashboard = useMemo(() => {
     return lancamentos.filter(l => {
       const correspondeMes = l.data.substring(0, 7) === dashMes;
       const correspondeTurno = dashTurno === 'Todos' || l.turno === dashTurno;
-      return correspondeMes && correspondeTurno;
+      const correspondeFilial = (l.filial || 'Marsil SP') === filialSelecionada;
+      return correspondeMes && correspondeTurno && correspondeFilial;
     });
-  }, [lancamentos, dashMes, dashTurno]);
+  }, [lancamentos, dashMes, dashTurno, filialSelecionada]);
 
   // Separadores Ativos no Mês
   const separadoresAtivosNoMesCount = useMemo(() => {
@@ -398,6 +429,9 @@ export default function App() {
 
     // Inicializar os separadores participantes do período para evitar furos de dados
     lancamentos.forEach(l => {
+      // Filtrar lançamentos da filial selecionada
+      if ((l.filial || 'Marsil SP') !== filialSelecionada) return;
+
       // Filtrar lançamentos que combinam com o mês selecionado
       if (l.data.substring(0, 7) !== dashMes) return;
       
@@ -440,7 +474,7 @@ export default function App() {
         mediaDia: media
       };
     });
-  }, [lancamentos, separadores, dashMes, dashTurno]);
+  }, [lancamentos, separadores, dashMes, dashTurno, filialSelecionada]);
 
   // Ordenação da Tabela Completa do Dashboard
   const classificacaoOdernada = useMemo(() => {
@@ -624,6 +658,24 @@ export default function App() {
   const [sepTurno, setSepTurno] = useState<TurnoPadrao>('Tarde');
   const [sepStatus, setSepStatus] = useState<StatusSeparador>('Ativo');
   const [sepEditId, setSepEditId] = useState<string | null>(null);
+  const [sepFilialCadastro, setSepFilialCadastro] = useState<'Marsil SP' | 'Marsil BC'>('Marsil SP');
+
+  // Mantém a filial de cadastro alinhada com a filial selecionada se não estiver editando
+  useEffect(() => {
+    if (!sepEditId) {
+      setSepFilialCadastro(filialSelecionada);
+    }
+  }, [filialSelecionada, sepEditId]);
+
+  // Limpa formulários quando a filial selecionada muda
+  useEffect(() => {
+    limparFormularioLancamento();
+    setSepNome('');
+    setSepTurno('Tarde');
+    setSepStatus('Ativo');
+    setSepEditId(null);
+    setHistFiltroSeparador('Todos');
+  }, [filialSelecionada]);
 
   // Cadastrar ou Editar Separador
   const handleSalvarSeparador = (e: React.FormEvent) => {
@@ -648,7 +700,7 @@ export default function App() {
       // Editando
       const atualizados = separadores.map(s => {
         if (s.id === sepEditId) {
-          return { ...s, nome: sepNome.trim(), turnoPadrao: sepTurno, status: sepStatus };
+          return { ...s, nome: sepNome.trim(), turnoPadrao: sepTurno, status: sepStatus, filial: sepFilialCadastro };
         }
         return s;
       });
@@ -661,7 +713,8 @@ export default function App() {
         id: 'sep_' + Date.now(),
         nome: sepNome.trim(),
         turnoPadrao: sepTurno,
-        status: 'Ativo' // Sempre inicia como Ativo
+        status: 'Ativo', // Sempre inicia como Ativo
+        filial: sepFilialCadastro
       };
       saveSeparadores([...separadores, novo]);
       showToast(`Separador "${novo.nome}" cadastrado com sucesso!`);
@@ -678,6 +731,7 @@ export default function App() {
     setSepNome(s.nome);
     setSepTurno(s.turnoPadrao);
     setSepStatus(s.status);
+    setSepFilialCadastro(s.filial || 'Marsil SP');
     // Rola de volta para o form
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -728,14 +782,15 @@ export default function App() {
   // Lançamentos filtrados do Histórico
   const lancamentosFiltradosHistorico = useMemo(() => {
     return lancamentos.filter(l => {
+      const atendeFilial = (l.filial || 'Marsil SP') === filialSelecionada;
       const atendeDe = !histFiltroDe || l.data >= histFiltroDe;
       const atendeAte = !histFiltroAte || l.data <= histFiltroAte;
       const atendeSeparador = histFiltroSeparador === 'Todos' || l.separadorId === histFiltroSeparador;
       const atendeTurno = histFiltroTurno === 'Todos' || l.turno === histFiltroTurno;
 
-      return atendeDe && atendeAte && atendeSeparador && atendeTurno;
+      return atendeFilial && atendeDe && atendeAte && atendeSeparador && atendeTurno;
     }).sort((a, b) => b.data.localeCompare(a.data) || b.id.localeCompare(a.id));
-  }, [lancamentos, histFiltroDe, histFiltroAte, histFiltroSeparador, histFiltroTurno]);
+  }, [lancamentos, histFiltroDe, histFiltroAte, histFiltroSeparador, histFiltroTurno, filialSelecionada]);
 
   // Salvar alteração do Lançamento Editado
   const handleAtualizarLancamentoEditado = (e: React.FormEvent) => {
@@ -901,6 +956,7 @@ export default function App() {
     
     // Pegar todos os dias que tiveram lançamentos no mês filtrado
     lancamentos.forEach(l => {
+      if ((l.filial || 'Marsil SP') !== filialSelecionada) return;
       if (l.data.substring(0, 7) !== dashMes) return;
       const diaStr = l.data.substring(8, 10); // DD
       
@@ -932,7 +988,25 @@ export default function App() {
       maxTarde,
       maxNoite
     };
-  }, [lancamentos, dashMes]);
+  }, [lancamentos, dashMes, filialSelecionada]);
+
+  if (usuarioLogado && !authIniciado) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#0f1419] text-[#e1e8ed] font-sans p-4">
+        <div className="flex flex-col items-center max-w-sm text-center">
+          <div className="w-14 h-14 rounded-xl bg-[#ff6b35]/10 border border-[#ff6b35]/20 flex items-center justify-center mb-4">
+            <RefreshCw className="w-6 h-6 text-[#ff6b35] animate-spin" />
+          </div>
+          <h2 className="text-sm font-bold text-white uppercase tracking-wider mb-2 font-sans">
+            Sincronizando com o Banco de Dados
+          </h2>
+          <p className="text-xs text-[#8899a6]">
+            Por favor, aguarde enquanto estabelecemos uma conexão segura com o Firestore do Firebase...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (!usuarioLogado) {
     return (
@@ -1021,12 +1095,40 @@ export default function App() {
       {/* ─── CABEÇALHO PRINCIPAL (HIGH DENSITY) ─── */}
       <header className="border-b-[2px] border-[#2d3742] bg-[#0f1419] sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 flex flex-col lg:flex-row items-center justify-between gap-4 h-auto lg:h-[60px] py-2 lg:py-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded bg-[#ff6b35] flex items-center justify-center font-bold text-white text-md shadow-md shadow-[#ff6b35]/20">
-              MR
+          <div className="flex flex-col md:flex-row items-start md:items-center gap-2 md:gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded bg-[#ff6b35] flex items-center justify-center font-bold text-white text-md shadow-md shadow-[#ff6b35]/20">
+                MR
+              </div>
+              <div className="text-md sm:text-lg font-bold text-[#ff6b35] tracking-tight whitespace-nowrap">
+                Ranking Separadores <span className="text-[#8899a6] text-xs font-semibold">· Marsil Romaneio</span>
+              </div>
             </div>
-            <div className="text-md sm:text-lg font-bold text-[#ff6b35] tracking-tight whitespace-nowrap">
-              Ranking Separadores <span className="text-[#8899a6] text-xs font-semibold">· Marsil Romaneio</span>
+
+            {/* Sliding Filial Selector */}
+            <div className="flex bg-[#1a2129] border border-[#2d3742] rounded p-0.5 text-[10px] font-bold">
+              <button
+                type="button"
+                onClick={() => setFilialSelecionada('Marsil SP')}
+                className={`px-3 py-1 rounded cursor-pointer transition-all ${
+                  filialSelecionada === 'Marsil SP'
+                    ? 'bg-[#ff6b35] text-white shadow-sm'
+                    : 'text-[#8899a6] hover:text-white'
+                }`}
+              >
+                Marsil SP
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilialSelecionada('Marsil BC')}
+                className={`px-3 py-1 rounded cursor-pointer transition-all ${
+                  filialSelecionada === 'Marsil BC'
+                    ? 'bg-[#ff6b35] text-white shadow-sm'
+                    : 'text-[#8899a6] hover:text-white'
+                }`}
+              >
+                Marsil BC
+              </button>
             </div>
           </div>
 
@@ -1945,6 +2047,19 @@ export default function App() {
                   />
                 </div>
 
+                {/* Filial */}
+                <div>
+                  <label className="block text-[9px] font-bold text-[#8899a6] mb-1 uppercase tracking-wider">Filial Marsil</label>
+                  <select
+                    value={sepFilialCadastro}
+                    onChange={(e) => setSepFilialCadastro(e.target.value as 'Marsil SP' | 'Marsil BC')}
+                    className="w-full bg-[#0f1419] border border-[#2d3742] rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#ff6b35] cursor-pointer"
+                  >
+                    <option value="Marsil SP">Marsil SP (São Paulo)</option>
+                    <option value="Marsil BC">Marsil BC (Balneário Camboriú)</option>
+                  </select>
+                </div>
+
                 {/* Turno Padrão */}
                 <div>
                   <label className="block text-[9px] font-bold text-[#8899a6] mb-1 uppercase tracking-wider">Turno Padrão de Separação</label>
@@ -2019,9 +2134,9 @@ export default function App() {
             {/* Listagem de Cadastrados (Direita) */}
             <div className="lg:col-span-8 bg-[#1a2129] border border-[#2d3742] rounded p-4 shadow-md">
               <div className="flex items-center justify-between mb-3 pb-2 border-b border-[#2d3742]">
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Separadores Cadastrados</h3>
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Separadores Cadastrados ({filialSelecionada})</h3>
                 <span className="text-[10px] bg-[#0f1419] px-2 py-0.5 rounded border border-[#2d3742] font-mono text-[#ff6b35] font-bold">
-                  TOTAL: {separadores.length}
+                  TOTAL: {separadores.filter(s => (s.filial || 'Marsil SP') === filialSelecionada).length}
                 </span>
               </div>
 
@@ -2037,14 +2152,14 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#2d3742]/45">
-                    {separadores.length === 0 ? (
+                    {separadores.filter(s => (s.filial || 'Marsil SP') === filialSelecionada).length === 0 ? (
                       <tr>
                         <td colSpan={5} className="py-6 text-center text-[#8899a6]">
-                          Nenhum separador cadastrado.
+                          Nenhum separador cadastrado para esta filial.
                         </td>
                       </tr>
                     ) : (
-                      separadores.map(s => {
+                      separadores.filter(s => (s.filial || 'Marsil SP') === filialSelecionada).map(s => {
                         const temHist = separadorTemHistorico(s.id);
                         return (
                           <tr key={s.id} className="hover:bg-white/[0.02] border-b border-[#2d3742]/10 transition-colors">

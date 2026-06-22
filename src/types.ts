@@ -1,12 +1,14 @@
 export type Turno = 'Tarde' | 'Noite';
 export type TurnoPadrao = 'Tarde' | 'Noite' | 'Ambos';
 export type StatusSeparador = 'Ativo' | 'Inativo';
+export type Filial = 'Marsil SP' | 'Marsil BC';
 
 export interface Separador {
   id: string;
   nome: string;
   turnoPadrao: TurnoPadrao;
   status: StatusSeparador;
+  filial?: Filial;
 }
 
 export interface Lancamento {
@@ -18,4 +20,5 @@ export interface Lancamento {
   erros: number; // default 0
   observacao?: string;
   createdAt?: string; // para fins de ordenação ou auditoria interna
+  filial?: Filial;
 }

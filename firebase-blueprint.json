@@ -8,7 +8,8 @@
         "id": { "type": "string" },
         "nome": { "type": "string" },
         "turnoPadrao": { "type": "string", "enum": ["Tarde", "Noite", "Ambos"] },
-        "status": { "type": "string", "enum": ["Ativo", "Inativo"] }
+        "status": { "type": "string", "enum": ["Ativo", "Inativo"] },
+        "filial": { "type": "string", "enum": ["Marsil SP", "Marsil BC"] }
       },
       "required": ["id", "nome", "turnoPadrao", "status"]
     },
@@ -24,7 +25,8 @@
         "quantidade": { "type": "integer" },
         "erros": { "type": "integer" },
         "observacao": { "type": "string" },
-        "createdAt": { "type": "string" }
+        "createdAt": { "type": "string" },
+        "filial": { "type": "string", "enum": ["Marsil SP", "Marsil BC"] }
       },
       "required": ["id", "data", "turno", "separadorId", "quantidade", "erros"]
     }
