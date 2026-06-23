@@ -112,6 +112,9 @@ export default function App() {
     setLancamentos(parsedLans);
     setModoOffline(true);
     setAuthIniciado(true);
+    if (usuarioLogado) {
+      showToast('Modo Local (Offline) ativado automaticamente.', 'info');
+    }
   };
 
   const alternarModoOnline = () => {
@@ -119,6 +122,70 @@ export default function App() {
     setModoOffline(false);
     setAuthIniciado(false);
     window.location.reload();
+  };
+
+  // --- SINCRONIZAÇÃO DE DADOS OFFLINE PARA O FIRESTORE ---
+  const [itensPendentesSincronismo, setItensPendentesSincronismo] = useState<{ seps: Separador[], lans: Lancamento[] } | null>(null);
+  const [estaSincronizando, setEstaSincronizando] = useState(false);
+
+  useEffect(() => {
+    if (!authIniciado || modoOffline) {
+      setItensPendentesSincronismo(null);
+      return;
+    }
+
+    const sepsLocaisStr = localStorage.getItem('marsil_separadores_offline');
+    const lansLocaisStr = localStorage.getItem('marsil_lancamentos_offline');
+    
+    const parsedSeps: Separador[] = sepsLocaisStr ? JSON.parse(sepsLocaisStr) : [];
+    const parsedLans: Lancamento[] = lansLocaisStr ? JSON.parse(lansLocaisStr) : [];
+
+    // Encontra itens locais que não estão no estado online carregado do Firestore
+    const sepsNaoSalvos = parsedSeps.filter(local => !separadores.some(online => online.id === local.id));
+    const lansNaoSalvos = parsedLans.filter(local => !lancamentos.some(online => online.id === local.id));
+
+    if (sepsNaoSalvos.length > 0 || lansNaoSalvos.length > 0) {
+      setItensPendentesSincronismo({ seps: sepsNaoSalvos, lans: lansNaoSalvos });
+    } else {
+      setItensPendentesSincronismo(null);
+    }
+  }, [authIniciado, modoOffline, separadores, lancamentos]);
+
+  const handleSincronizarLocaisComNuvem = async () => {
+    if (!itensPendentesSincronismo) return;
+    setEstaSincronizando(true);
+    showToast('Sincronizando seus dados locais com a nuvem...', 'info');
+
+    try {
+      const { seps, lans } = itensPendentesSincronismo;
+
+      // Sincroniza os cadastros de separadores
+      for (const s of seps) {
+        await salvarSeparadorFirestore(s);
+      }
+
+      // Sincroniza os lançamentos
+      for (const l of lans) {
+        await salvarLancamentoFirestore({
+          ...l,
+          createdAt: l.createdAt || new Date().toISOString()
+        });
+      }
+
+      // Atualiza o backup offline local com a união total
+      const sepsUnificados = [...separadores, ...seps];
+      const lansUnificados = [...lancamentos, ...lans];
+      localStorage.setItem('marsil_separadores_offline', JSON.stringify(sepsUnificados));
+      localStorage.setItem('marsil_lancamentos_offline', JSON.stringify(lansUnificados));
+
+      setItensPendentesSincronismo(null);
+      showToast('Dados sincronizados com sucesso! Agora estão salvos na nuvem de forma permanente.', 'success');
+    } catch (err) {
+      console.error('Erro na sincronização:', err);
+      showToast('Ocorreu um erro ao salvar na nuvem.', 'error');
+    } finally {
+      setEstaSincronizando(false);
+    }
   };
 
   // --- ESCUTA ATIVA DO STATUS DE AUTENTICAÇÃO DO FIREBASE ---
@@ -136,8 +203,9 @@ export default function App() {
         try {
           await signInAnonymously(auth);
         } catch (error) {
-          console.error('Erro de autenticação anônima no Firebase:', error);
-          ativarFallbackOfflineSilencioso();
+          console.error('Erro de autenticação anônima no Firebase (prosseguindo sem login):', error);
+          // Mesmo sem login anônimo, permitimos tentar escutar o Firestore diretamente
+          setAuthIniciado(true);
         }
       }
     });
@@ -1396,6 +1464,53 @@ export default function App() {
 
       {/* ─── CONTEÚDO PRINCIPAL ─── */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-4 sm:p-5">
+
+        {/* Banner Informativo de Modo Offline / Sincronização */}
+        {modoOffline && (
+          <div className="mb-5 bg-[#ff6b35]/10 border border-[#ff6b35]/20 rounded p-4 text-xs text-[#ff9e7d] leading-relaxed flex flex-col md:flex-row items-start md:items-center justify-between gap-3 animate-fade-in">
+            <div className="flex gap-2.5 items-start">
+              <AlertTriangle className="w-5 h-5 text-[#ff6b35] shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-white block mb-0.5">⚠️ Modo Local (Offline) Ativo</strong>
+                <span>
+                  O navegador bloqueou a conexão direta com o banco em nuvem (geralmente devido a restrições de cookies em iframes do painel do AI Studio). Seus dados estão sendo guardados com segurança <strong>apenas localmente neste navegador</strong>.
+                </span>
+                <div className="mt-2 flex flex-col gap-1 text-[11px] text-[#8899a6]">
+                  <p>• Para acessar seus dados em outros navegadores ou computadores, você deve abrir o aplicativo em uma <strong>nova aba (fora do AI Studio)</strong> clicando no botão de seta no canto superior direito do painel de visualização.</p>
+                  <p>• Você também pode mover seus dados baixando o backup clicando em <strong>"Exportar JSON"</strong> (na aba Histórico) e depois importando-o no outro navegador usando o botão <strong>"Importar JSON"</strong>.</p>
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={alternarModoOnline}
+              className="bg-[#ff6b35] hover:bg-[#e05621] text-white font-bold text-[10px] py-1.5 px-3 rounded uppercase shrink-0 transition-colors cursor-pointer self-stretch md:self-auto text-center"
+            >
+              Tentar Reconectar
+            </button>
+          </div>
+        )}
+
+        {/* Banner de Sincronismo Pendente (Offline -> Online) */}
+        {!modoOffline && itensPendentesSincronismo && (
+          <div className="mb-5 bg-[#00b87c]/10 border border-[#00b87c]/25 rounded p-4 text-xs text-[#52e0a5] leading-relaxed flex flex-col md:flex-row items-start md:items-center justify-between gap-3 animate-fade-in animate-pulse-subtle">
+            <div className="flex gap-2.5 items-start">
+              <Upload className="w-5 h-5 text-[#00b87c] shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-white block mb-0.5">☁️ Dados Locais Disponíveis para Sincronização</strong>
+                <span>
+                  Encontramos dados salvos localmente neste navegador (<strong>{itensPendentesSincronismo.seps.length} separador(es)</strong> e <strong>{itensPendentesSincronismo.lans.length} lançamento(s)</strong>) que ainda não estão gravados no banco de dados em nuvem. Deseja salvá-los na nuvem agora para que fiquem disponíveis em qualquer navegador ou computador?
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={handleSincronizarLocaisComNuvem}
+              disabled={estaSincronizando}
+              className="bg-[#00b87c] hover:bg-[#009665] disabled:opacity-50 text-white font-bold text-[10px] py-1.5 px-3 rounded uppercase shrink-0 transition-colors cursor-pointer self-stretch md:self-auto text-center font-sans"
+            >
+              {estaSincronizando ? 'Sincronizando...' : 'Sincronizar com Nuvem'}
+            </button>
+          </div>
+        )}
         
         {/* ==============================================
              ABA 1: LANÇAMENTO DIÁRIO (HIGH DENSITY)
