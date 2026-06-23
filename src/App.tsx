@@ -52,8 +52,14 @@ export default function App() {
   const [loginPass, setLoginPass] = useState('');
 
   // --- ESTADOS DO SISTEMA ---
-  const [separadores, setSeparadores] = useState<Separador[]>([]);
-  const [lancamentos, setLancamentos] = useState<Lancamento[]>([]);
+  const [separadores, setSeparadores] = useState<Separador[]>(() => {
+    const sepsLocais = localStorage.getItem('marsil_separadores_offline');
+    return sepsLocais ? JSON.parse(sepsLocais) : [];
+  });
+  const [lancamentos, setLancamentos] = useState<Lancamento[]>(() => {
+    const lansLocais = localStorage.getItem('marsil_lancamentos_offline');
+    return lansLocais ? JSON.parse(lansLocais) : [];
+  });
   const [tabAtiva, setTabAtiva] = useState<'lancamento' | 'dashboard' | 'separadores' | 'historico'>('lancamento');
   
   // --- FILIAL ATIVA ---
@@ -103,17 +109,27 @@ export default function App() {
     showToast('Modo local (Offline) ativado com sucesso!', 'info');
   };
 
-  const ativarFallbackOfflineSilencioso = () => {
+  const ativarFallbackOfflineSilencioso = (err?: any) => {
     const sepsLocais = localStorage.getItem('marsil_separadores_offline');
     const lansLocais = localStorage.getItem('marsil_lancamentos_offline');
     let parsedSeps = sepsLocais ? JSON.parse(sepsLocais) : [];
     let parsedLans = lansLocais ? JSON.parse(lansLocais) : [];
     setSeparadores(parsedSeps);
     setLancamentos(parsedLans);
-    setModoOffline(true);
-    setAuthIniciado(true);
-    if (usuarioLogado) {
-      showToast('Modo Local (Offline) ativado automaticamente.', 'info');
+
+    // Só força o Modo Offline automaticamente se estivermos rodando dentro do iframe do AI Studio
+    const isIframe = window.self !== window.top;
+    if (isIframe) {
+      setModoOffline(true);
+      setAuthIniciado(true);
+      if (usuarioLogado) {
+        showToast('Modo Local (Offline) ativado automaticamente.', 'info');
+      }
+    } else {
+      // Fora do iframe (em abas independentes como Vercel), mantemos online e mostramos o erro de conexão real
+      if (err && usuarioLogado) {
+        showToast(`Erro ao sincronizar com banco em nuvem: ${err.message || err}`, 'error');
+      }
     }
   };
 
@@ -154,7 +170,7 @@ export default function App() {
   const handleSincronizarLocaisComNuvem = async () => {
     if (!itensPendentesSincronismo) return;
     setEstaSincronizando(true);
-    showToast('Sincronizando seus dados locais com a nuvem...', 'info');
+    showToast('Iniciando sincronização automática de dados locais...', 'info');
 
     try {
       const { seps, lans } = itensPendentesSincronismo;
@@ -179,14 +195,21 @@ export default function App() {
       localStorage.setItem('marsil_lancamentos_offline', JSON.stringify(lansUnificados));
 
       setItensPendentesSincronismo(null);
-      showToast('Dados sincronizados com sucesso! Agora estão salvos na nuvem de forma permanente.', 'success');
+      showToast('Dados locais sincronizados com sucesso na nuvem de forma automática!', 'success');
     } catch (err) {
       console.error('Erro na sincronização:', err);
-      showToast('Ocorreu um erro ao salvar na nuvem.', 'error');
+      showToast('Ocorreu um erro ao sincronizar automaticamente na nuvem.', 'error');
     } finally {
       setEstaSincronizando(false);
     }
   };
+
+  // Auto-sincronização automática assim que houver conexão online ativa e dados pendentes
+  useEffect(() => {
+    if (!modoOffline && authIniciado && itensPendentesSincronismo && !estaSincronizando) {
+      handleSincronizarLocaisComNuvem();
+    }
+  }, [itensPendentesSincronismo, modoOffline, authIniciado, estaSincronizando]);
 
   // --- ESCUTA ATIVA DO STATUS DE AUTENTICAÇÃO DO FIREBASE ---
   useEffect(() => {
@@ -225,7 +248,7 @@ export default function App() {
       setSeparadores(seps);
     }, (err) => {
       console.error('Erro de conexão ao ler os separadores:', err);
-      ativarFallbackOfflineSilencioso();
+      ativarFallbackOfflineSilencioso(err);
     });
 
     // 3. Escuta ativa dos Lançamentos
@@ -233,7 +256,7 @@ export default function App() {
       setLancamentos(lans);
     }, (err) => {
       console.error('Erro de conexão ao ler os lançamentos:', err);
-      ativarFallbackOfflineSilencioso();
+      ativarFallbackOfflineSilencioso(err);
     });
 
     return () => {
@@ -1490,25 +1513,21 @@ export default function App() {
           </div>
         )}
 
-        {/* Banner de Sincronismo Pendente (Offline -> Online) */}
+        {/* Banner de Sincronismo Pendente (Sincronização Automática Ativa) */}
         {!modoOffline && itensPendentesSincronismo && (
           <div className="mb-5 bg-[#00b87c]/10 border border-[#00b87c]/25 rounded p-4 text-xs text-[#52e0a5] leading-relaxed flex flex-col md:flex-row items-start md:items-center justify-between gap-3 animate-fade-in animate-pulse-subtle">
             <div className="flex gap-2.5 items-start">
-              <Upload className="w-5 h-5 text-[#00b87c] shrink-0 mt-0.5" />
+              <Upload className="w-5 h-5 text-[#00b87c] shrink-0 mt-0.5 animate-bounce" />
               <div>
-                <strong className="text-white block mb-0.5">☁️ Dados Locais Disponíveis para Sincronização</strong>
+                <strong className="text-white block mb-0.5">☁️ Sincronização Automática com a Nuvem</strong>
                 <span>
-                  Encontramos dados salvos localmente neste navegador (<strong>{itensPendentesSincronismo.seps.length} separador(es)</strong> e <strong>{itensPendentesSincronismo.lans.length} lançamento(s)</strong>) que ainda não estão gravados no banco de dados em nuvem. Deseja salvá-los na nuvem agora para que fiquem disponíveis em qualquer navegador ou computador?
+                  Detectamos dados salvos localmente neste navegador (<strong>{itensPendentesSincronismo.seps.length} separador(es)</strong> e <strong>{itensPendentesSincronismo.lans.length} lançamento(s)</strong>) que ainda não estavam na nuvem. Eles estão sendo <strong>sincronizados e gravados no banco de dados de forma automática e transparente</strong> para você!
                 </span>
               </div>
             </div>
-            <button
-              onClick={handleSincronizarLocaisComNuvem}
-              disabled={estaSincronizando}
-              className="bg-[#00b87c] hover:bg-[#009665] disabled:opacity-50 text-white font-bold text-[10px] py-1.5 px-3 rounded uppercase shrink-0 transition-colors cursor-pointer self-stretch md:self-auto text-center font-sans"
-            >
-              {estaSincronizando ? 'Sincronizando...' : 'Sincronizar com Nuvem'}
-            </button>
+            <div className="bg-[#00b87c]/20 text-[#00b87c] font-bold text-[10px] py-1.5 px-3 rounded uppercase shrink-0 self-stretch md:self-auto text-center font-sans animate-pulse">
+              {estaSincronizando ? 'Sincronizando...' : 'Aguardando...'}
+            </div>
           </div>
         )}
         
